@@ -59,6 +59,20 @@ export type AssistantDefaults = ProviderDefaultsMap & {
   codex: CodexProviderDefaults;
 };
 
+/**
+ * Linear webhook integration configuration.
+ * When configured, issues assigned to the target user that transition to
+ * "In Progress" automatically trigger a workflow execution.
+ */
+export interface LinearConfig {
+  /** Linear assignee display name to match (case-insensitive). @default 'archon' */
+  assignee?: string;
+  /** Workflow name to trigger when an issue is activated. @default 'implement' */
+  workflow?: string;
+  /** Maps Linear team keys to registered Archon codebase names. */
+  mappings?: Record<string, string>;
+}
+
 export interface GlobalConfig {
   /**
    * Bot display name (shown in messages)
@@ -113,6 +127,12 @@ export interface GlobalConfig {
      */
     maxConversations?: number;
   };
+
+  /**
+   * Linear webhook integration settings.
+   * Requires LINEAR_API_KEY and LINEAR_WEBHOOK_SECRET env vars.
+   */
+  linear?: LinearConfig;
 }
 
 /**

@@ -83,6 +83,7 @@ export { cloneRepository, registerRepository, type RegisterResult } from './hand
 // =============================================================================
 export {
   type GlobalConfig,
+  type LinearConfig,
   type RepoConfig,
   type MergedConfig,
   type SafeConfig,
