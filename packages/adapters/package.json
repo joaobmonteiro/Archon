@@ -7,11 +7,12 @@
   "exports": {
     ".": "./src/index.ts",
     "./*": "./src/*",
+    "./pm/linear": "./src/pm/linear/index.ts",
     "./community/forge/gitea": "./src/community/forge/gitea/index.ts",
     "./community/forge/gitlab": "./src/community/forge/gitlab/index.ts"
   },
   "scripts": {
-    "test": "bun test src/chat/ src/community/chat/ src/community/forge/gitlab/auth.test.ts src/forge/github/auth.test.ts src/utils/ && bun test src/forge/github/adapter.test.ts && bun test src/forge/github/context.test.ts && bun test src/community/forge/gitea/adapter.test.ts && bun test src/community/forge/gitlab/adapter.test.ts",
+    "test": "bun test src/chat/ src/community/chat/ src/community/forge/gitlab/auth.test.ts src/forge/github/auth.test.ts src/utils/ && bun test src/forge/github/adapter.test.ts && bun test src/forge/github/context.test.ts && bun test src/community/forge/gitea/adapter.test.ts && bun test src/community/forge/gitlab/adapter.test.ts && bun test src/pm/linear/adapter.test.ts",
     "type-check": "bun x tsc --noEmit"
   },
   "dependencies": {
@@ -19,6 +20,7 @@
     "@archon/git": "workspace:*",
     "@archon/isolation": "workspace:*",
     "@archon/paths": "workspace:*",
+    "@linear/sdk": "^34.0.0",
     "@octokit/rest": "^22.0.0",
     "@slack/bolt": "^4.6.0",
     "discord.js": "^14.16.0",
