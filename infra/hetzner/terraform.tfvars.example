@@ -1,0 +1,22 @@
+# Copy to terraform.tfvars and fill in.
+
+# --- Required ---
+
+domain             = "archon.example.com"
+acme_email         = "devops@example.com"
+cloudflare_zone_id = "your-cloudflare-zone-id"
+
+# Your personal SSH public key (admin access).
+admin_ssh_pubkey = "ssh-ed25519 AAAAC3Nza... you@laptop"
+
+# --- Recommended ---
+
+# Narrow to your office/VPN CIDRs once you're live.
+# admin_cidrs = ["203.0.113.0/24", "198.51.100.42/32"]
+
+# --- Scaling knobs (defaults are fine for testing) ---
+
+# server_type  = "cpx32"                                  # 4 vCPU / 8 GB / 160 GB NVMe — €13.99/mo
+# location     = "nbg1"                                   # nbg1 / fsn1 / hel1
+# volume_size  = 50                                       # GB, minimum 10
+# archon_image = "ghcr.io/coleam00/archon:latest"         # swap to your fork's GHCR once you publish

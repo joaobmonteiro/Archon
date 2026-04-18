@@ -1,0 +1,98 @@
+# =============================================================================
+# Archon — VPS production compose
+# =============================================================================
+#
+# Full stack for a cloud-init-provisioned VPS: Archon + Postgres 17 + Caddy,
+# plus optional auth-service for Caddy forward_auth.
+#
+# Expected layout:
+#   /opt/archon/          (repo clone)
+#     .env                (symlink → /mnt/archon-data/.env)
+#     Caddyfile           (copied from Caddyfile.example)
+#     docker-compose.yml  (copy of this file, placed by cloud-init)
+#   /mnt/archon-data/     (Hetzner Volume)
+#     .env                (secrets)
+#     archon/             (Archon's ~/.archon — workspaces, logs, TLS certs)
+#     postgres/           (Postgres data)
+#     caddy-data/         (Caddy state — Let's Encrypt certs live here)
+#     caddy-config/       (Caddy config cache)
+#
+# Usage (on the server):
+#   cd /opt/archon
+#   docker compose --profile with-db --profile cloud up -d
+#   # or: add --profile auth for the forward-auth login page
+#
+
+services:
+  app:
+    image: ${ARCHON_IMAGE:-ghcr.io/coleam00/archon:latest}
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      ARCHON_DOCKER: "true"
+    expose:
+      - "${PORT:-3000}"
+    volumes:
+      - /mnt/archon-data/archon:/.archon
+    networks: [archon]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:${PORT:-3000}/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  postgres:
+    image: postgres:17-alpine
+    profiles: ["with-db"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: remote_coding_agent
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    volumes:
+      - /mnt/archon-data/postgres:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    networks: [archon]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["cloud"]
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - /mnt/archon-data/caddy-data:/data
+      - /mnt/archon-data/caddy-config:/config
+    networks: [archon]
+    depends_on:
+      app:
+        condition: service_healthy
+
+  # Optional forward-auth sidecar for Caddy. Built from source in the repo
+  # (cloud-init clones /opt/archon, which includes auth-service/). Uncomment
+  # the corresponding block in Caddyfile to enable the form login.
+  auth-service:
+    build: ./auth-service
+    profiles: ["auth"]
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      AUTH_PORT: "${AUTH_SERVICE_PORT:-9000}"
+    expose:
+      - "${AUTH_SERVICE_PORT:-9000}"
+    networks: [archon]
+
+networks:
+  archon:
+    driver: bridge

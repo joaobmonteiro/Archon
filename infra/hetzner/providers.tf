@@ -1,0 +1,6 @@
+# Both providers read their API token from the environment:
+#   export HCLOUD_TOKEN=...
+#   export CLOUDFLARE_API_TOKEN=...
+provider "hcloud" {}
+
+provider "cloudflare" {}

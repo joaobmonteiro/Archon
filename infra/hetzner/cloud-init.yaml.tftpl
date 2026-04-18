@@ -1,0 +1,186 @@
+#cloud-config
+# Templated by Terraform (infra/hetzner/server.tf). Extends the pattern from
+# deploy/cloud-init.yml with Hetzner-specific volume mount + image pull.
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - curl
+  - git
+  - ufw
+
+users:
+  - default
+  - name: archon
+    gecos: Archon Service User
+    shell: /bin/bash
+    lock_passwd: true
+    ssh_authorized_keys:
+      - ${deploy_pubkey}
+
+runcmd:
+  # --- Swap (OOM guard during image pull / first boot) ---
+  - |
+    if [ ! -f /swapfile ]; then
+      fallocate -l 2G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=2048
+      chmod 600 /swapfile
+      mkswap /swapfile
+      swapon /swapfile
+      echo '/swapfile none swap sw 0 0' >> /etc/fstab
+    fi
+
+  # --- Docker ---
+  - curl -fsSL https://get.docker.com | sh
+  - usermod -aG docker archon
+
+  # --- Copy SSH keys from the default cloud user to archon (human admin) ---
+  - |
+    DEFAULT_USER=$(getent passwd 1000 | cut -d: -f1)
+    if [ -n "$DEFAULT_USER" ] && [ "$DEFAULT_USER" != "archon" ] && [ -f /home/$DEFAULT_USER/.ssh/authorized_keys ]; then
+      mkdir -p /home/archon/.ssh
+      cat /home/$DEFAULT_USER/.ssh/authorized_keys >> /home/archon/.ssh/authorized_keys
+      sort -u /home/archon/.ssh/authorized_keys -o /home/archon/.ssh/authorized_keys
+      chmod 700 /home/archon/.ssh
+      chmod 600 /home/archon/.ssh/authorized_keys
+      chown -R archon:archon /home/archon/.ssh
+    elif [ -f /root/.ssh/authorized_keys ]; then
+      mkdir -p /home/archon/.ssh
+      cat /root/.ssh/authorized_keys >> /home/archon/.ssh/authorized_keys
+      sort -u /home/archon/.ssh/authorized_keys -o /home/archon/.ssh/authorized_keys
+      chmod 700 /home/archon/.ssh
+      chmod 600 /home/archon/.ssh/authorized_keys
+      chown -R archon:archon /home/archon/.ssh
+    fi
+
+  # --- UFW belt-and-braces (Hetzner cloud firewall already enforces ingress) ---
+  - ufw allow 22/tcp
+  - ufw allow 80/tcp
+  - ufw allow 443/tcp
+  - ufw allow 443/udp
+  - ufw --force enable
+
+  # --- Mount the attached Hetzner Volume at /mnt/archon-data ---
+  - |
+    DEV="/dev/disk/by-id/scsi-0HC_Volume_${volume_device_id}"
+    for _ in $(seq 1 60); do
+      [ -e "$DEV" ] && break
+      sleep 2
+    done
+    if [ ! -e "$DEV" ]; then
+      echo "[cloud-init] Hetzner volume device not found at $DEV" >&2
+      exit 1
+    fi
+    if ! blkid "$DEV" >/dev/null 2>&1; then
+      mkfs.ext4 -F "$DEV"
+    fi
+    mkdir -p /mnt/archon-data
+    mountpoint -q /mnt/archon-data || mount -o discard,defaults "$DEV" /mnt/archon-data
+    UUID=$(blkid -s UUID -o value "$DEV")
+    if ! grep -q "$UUID" /etc/fstab; then
+      echo "UUID=$UUID /mnt/archon-data ext4 discard,nofail,defaults 0 2" >> /etc/fstab
+    fi
+
+  # --- Create directory layout on the volume (idempotent) ---
+  - |
+    mkdir -p /mnt/archon-data/archon
+    mkdir -p /mnt/archon-data/postgres
+    mkdir -p /mnt/archon-data/caddy-data
+    mkdir -p /mnt/archon-data/caddy-config
+    chown -R archon:archon /mnt/archon-data
+
+  # --- Clone Archon, stage compose + Caddyfile ---
+  - |
+    set -e
+    if [ ! -d /opt/archon/.git ]; then
+      git clone https://github.com/coleam00/Archon.git /opt/archon
+    fi
+    cp /opt/archon/Caddyfile.example /opt/archon/Caddyfile
+    cp /opt/archon/deploy/docker-compose.vps.yml /opt/archon/docker-compose.yml
+    ln -sfn /mnt/archon-data/.env /opt/archon/.env
+    chown -R archon:archon /opt/archon
+
+  # --- Seed .env with Terraform-managed defaults. Secrets are still REPLACE_ME. ---
+  - |
+    if [ ! -f /mnt/archon-data/.env ]; then
+      cat > /mnt/archon-data/.env <<'ENVEOF'
+# Seeded by cloud-init on first boot. Edit before `docker compose up`.
+
+# --- Non-secret, cloud-init managed ---
+DOMAIN=__DOMAIN__
+ACME_EMAIL=__ACME_EMAIL__
+ARCHON_DATA=/mnt/archon-data/archon
+PORT=3000
+
+# --- In-container Postgres (docker-compose --profile with-db) ---
+DATABASE_URL=postgresql://postgres:postgres@postgres:5432/remote_coding_agent
+POSTGRES_PASSWORD=postgres
+
+# --- AI providers (fill in at least one) ---
+# CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
+# ANTHROPIC_API_KEY=sk-ant-...
+
+# --- Integrations (fill in what you use) ---
+# GITHUB_TOKEN=ghp_...
+# WEBHOOK_SECRET=...
+# LINEAR_API_KEY=...
+# LINEAR_WEBHOOK_SECRET=...
+# SLACK_BOT_TOKEN=xoxb-...
+# SLACK_APP_TOKEN=xapp-...
+# DISCORD_BOT_TOKEN=...
+# TELEGRAM_BOT_TOKEN=...
+# TELEGRAM_ALLOWED_USER_IDS=...
+
+# --- Optional Caddy basic-auth gate on the Web UI ---
+# Generate: docker run caddy caddy hash-password --plaintext 'YOURPASS'
+# Paste the hash below, escaping every $ as $$ so docker-compose doesn't interpolate.
+# CADDY_BASIC_AUTH=basicauth @protected { admin REPLACE_WITH_HASH }
+ENVEOF
+      # substitute placeholders outside the heredoc so Terraform values survive
+      sed -i "s|__DOMAIN__|${domain}|g; s|__ACME_EMAIL__|${acme_email}|g" /mnt/archon-data/.env
+      chmod 600 /mnt/archon-data/.env
+      chown archon:archon /mnt/archon-data/.env
+    fi
+
+  # --- Pre-pull images (first `up` is then fast) ---
+  - sudo -u archon docker pull ${archon_image}
+  - sudo -u archon docker pull postgres:17-alpine
+  - sudo -u archon docker pull caddy:2-alpine
+
+  # --- MOTD with post-install steps ---
+  - |
+    cat > /etc/motd <<MOTDEOF
+
+    ============================================
+     Archon (Hetzner Cloud)
+    ============================================
+
+    Domain:      ${domain}
+    Image:       ${archon_image}
+    Stack:       Archon + Postgres 17 + Caddy (auto-TLS)
+    App dir:     /opt/archon
+    Data volume: /mnt/archon-data
+    Env file:    /mnt/archon-data/.env  (symlinked from /opt/archon/.env)
+
+    --- Next steps ---
+
+    1) Fill secrets:
+         sudo -u archon vi /mnt/archon-data/.env
+       At minimum set CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_API_KEY) and whatever
+       platform tokens you use.
+
+    2) Start the stack:
+         cd /opt/archon
+         docker compose --profile with-db --profile cloud up -d
+
+    3) Verify:
+         curl -I https://${domain}/api/health
+         docker compose logs -f app
+
+    Deploys are automated via .github/workflows/deploy-vps.yml — after
+    ghcr.io publishes a new image the workflow SSHes in and runs
+    \`docker compose pull && up -d\`.
+
+    ============================================
+    MOTDEOF
+  - echo "[cloud-init] archon provisioning complete — see /etc/motd"
