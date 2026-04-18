@@ -1,0 +1,19 @@
+# Terraform local state + provider cache
+.terraform/
+.terraform.lock.hcl
+terraform.tfstate
+terraform.tfstate.backup
+terraform.tfstate.*.backup
+crash.log
+crash.*.log
+
+# Local overrides
+*.auto.tfvars
+terraform.tfvars
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Planning artifacts
+*.tfplan

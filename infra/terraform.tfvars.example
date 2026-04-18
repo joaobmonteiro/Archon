@@ -1,0 +1,37 @@
+aws_region  = "eu-west-1"
+environment = "test"
+name_prefix = "archon"
+
+# Networking
+vpc_cidr          = "10.30.0.0/16"
+alb_ingress_cidrs = ["0.0.0.0/0"] # tighten for /* app auth; webhooks still need broad access
+
+# TLS — create this in ACM ahead of time (DNS validation via Route 53 is easiest).
+# Must be in the same region as the ALB.
+acm_certificate_arn = "arn:aws:acm:eu-west-1:123456789012:certificate/00000000-0000-0000-0000-000000000000"
+
+# Compute — testing tier. Handles ~2-4 concurrent workflows.
+# For production (~60 concurrent): bump to r6i.4xlarge, container_memory_reservation_mb=100000, max_concurrent_conversations=64.
+ec2_instance_type               = "t3.large"
+container_memory_reservation_mb = 6000
+max_concurrent_conversations    = 4
+
+# Storage — persistent /mnt/archon volume. 50 GB fits testing; raise to 200 for prod.
+ebs_size_gb    = 50
+ebs_iops       = 3000
+ebs_throughput = 125
+
+# Image — build and push separately.
+# docker build -t 123456789012.dkr.ecr.eu-west-1.amazonaws.com/archon:latest .
+# aws ecr get-login-password | docker login --username AWS --password-stdin 123456789012.dkr.ecr.eu-west-1.amazonaws.com
+# docker push 123456789012.dkr.ecr.eu-west-1.amazonaws.com/archon:latest
+archon_image_uri = "123456789012.dkr.ecr.eu-west-1.amazonaws.com/archon:latest"
+
+# Database — Aurora Serverless v2 at the smallest capacity. Raise db_max_capacity for prod.
+db_min_capacity   = 0.5
+db_max_capacity   = 1
+db_engine_version = "16.4"
+
+# Ops
+cloudwatch_log_retention_days = 7
+enable_deletion_protection    = false
