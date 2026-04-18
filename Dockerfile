@@ -74,6 +74,8 @@ RUN apt-get update && apt-get install -y \
     postgresql-client \
     # Chromium for agent-browser E2E testing (drives browser via CDP)
     chromium \
+    # jq for bash-node scripts that parse JSON artifacts
+    jq \
     && rm -rf /var/lib/apt/lists/*
 
 # Install GitHub CLI

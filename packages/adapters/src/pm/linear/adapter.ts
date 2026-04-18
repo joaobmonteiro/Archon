@@ -133,13 +133,17 @@ export class LinearAdapter implements IPlatformAdapter {
     // Only trigger when state transitions to "started" (In Progress).
     if (issue.state.type !== 'started') return;
 
-    if (!isTargetAssignee(issue.assignee?.displayName, this.targetAssignee)) return;
+    // Linear's webhook payload reliably includes `name` (full name) but
+    // `displayName` (short handle) is optional and often absent. Match
+    // against either so config can point at whichever field the user sees.
+    const assigneeCandidates = [issue.assignee?.displayName, issue.assignee?.name];
+    if (!assigneeCandidates.some(n => isTargetAssignee(n, this.targetAssignee))) return;
 
     getLog().info(
       {
         issueId: issue.identifier,
         team: issue.team.key,
-        assignee: issue.assignee?.displayName,
+        assignee: issue.assignee?.displayName ?? issue.assignee?.name,
       },
       'linear.issue_triggered'
     );
