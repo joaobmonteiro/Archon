@@ -380,11 +380,15 @@ async function applyNodeConfig(
       nodeConfig.hooks as Record<string, YAMLHookMatcher[] | undefined>
     );
     if (Object.keys(builtHooks).length > 0) {
-      // Merge with existing hooks (PostToolUse capture hook)
-      const existingHooks = options.hooks as SDKHooksMap | undefined;
+      // Some callers (e.g. the warnings-extraction path in sendQuery) pass a
+      // throwaway options object with no `hooks` set. Initialize defensively so
+      // the merge below doesn't crash with "undefined is not an object" when
+      // a node declares `hooks:` in YAML.
       if (!options.hooks) {
-        (options as Record<string, unknown>).hooks = {};
+        options.hooks = {} as SDKHooksMap;
       }
+      // Merge with existing hooks (PostToolUse capture hook)
+      const existingHooks = options.hooks as SDKHooksMap;
       for (const [event, matchers] of Object.entries(builtHooks)) {
         if (!matchers) continue;
         const existing = existingHooks?.[event] as HookCallbackMatcher[] | undefined;
