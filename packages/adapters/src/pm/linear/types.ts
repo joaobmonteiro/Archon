@@ -61,10 +61,24 @@ export interface LinearCommentData {
 }
 
 /**
- * Type guard: check if webhook data is an issue payload.
+ * Type guard: check if webhook data is an issue payload. Performs a structural
+ * check so a malformed payload with `type: 'Issue'` but the wrong shape does
+ * not slip past discriminator checks downstream.
  */
 export function isIssueData(
   payload: LinearWebhookPayload
 ): payload is LinearWebhookPayload & { data: LinearIssueData } {
-  return payload.type === 'Issue';
+  if (payload.type !== 'Issue') return false;
+  const data = payload.data as Partial<LinearIssueData> | null | undefined;
+  if (!data || typeof data !== 'object') return false;
+  return (
+    typeof data.id === 'string' &&
+    typeof data.identifier === 'string' &&
+    typeof data.state === 'object' &&
+    data.state !== null &&
+    typeof data.state.type === 'string' &&
+    typeof data.team === 'object' &&
+    data.team !== null &&
+    typeof data.team.key === 'string'
+  );
 }

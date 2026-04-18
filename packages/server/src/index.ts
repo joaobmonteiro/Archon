@@ -454,18 +454,15 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     // Initialize Linear adapter (conditional)
     if (process.env.LINEAR_API_KEY && process.env.LINEAR_WEBHOOK_SECRET) {
       const globalConfig = await loadGlobalConfig();
-      const linearConfig = globalConfig.linear ?? {};
       linear = new LinearAdapter(
         process.env.LINEAR_API_KEY,
         process.env.LINEAR_WEBHOOK_SECRET,
         lockManager,
-        linearConfig.assignee ?? 'archon',
-        linearConfig.workflow ?? 'implement',
-        new Map(Object.entries(linearConfig.mappings ?? {}))
+        globalConfig.linear ?? {}
       );
       await linear.start();
     } else {
-      getLog().info('linear_adapter_skipped');
+      getLog().info('linear.adapter_skipped');
     }
   } else {
     getLog().info('platform_adapters_skipped');
@@ -592,7 +589,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         return c.json({ error: 'Internal server error' }, 500);
       }
     });
-    getLog().info('linear_webhook_registered');
+    getLog().info('linear.webhook_registered');
   }
 
   // Health check endpoints

@@ -705,12 +705,17 @@ export async function handleMessage(
         await platform.sendMessage(conversationId, result.message);
 
         if (result.workflow) {
+          // Prefer explicit args from the slash command. When absent (e.g. an
+          // adapter synthesised `/workflow run <name>` with no inline args),
+          // fall back to issueContext so webhook-triggered workflows still
+          // receive the rich trigger context as their `$ARGUMENTS`.
+          const workflowArgs = result.workflow.args || issueContext || message;
           await handleWorkflowRunCommand(
             platform,
             conversationId,
             conversation,
             result.workflow.definition,
-            result.workflow.args ?? message,
+            workflowArgs,
             isolationHints
           );
         }
