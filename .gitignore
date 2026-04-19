@@ -22,6 +22,9 @@ yarn-error.log*
 # ESLint cache
 .eslintcache
 
+# Devbox / Nix (devbox.json + devbox.lock are committed; the local profile is not)
+.devbox/
+
 # Environment files
 .env
 .env.local
