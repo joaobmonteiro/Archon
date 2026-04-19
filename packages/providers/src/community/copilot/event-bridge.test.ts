@@ -122,19 +122,18 @@ describe('bridgeCopilotSession', () => {
   });
 
   test('emits assistant chunks from message_delta events and ends on idle', async () => {
-    // Override `send` to fire scripted events then resolve.
+    // Emit payloads match the real SDK shape: `{ type, data: {...} }`.
+    // Session ID is published on `session.start`; token usage on
+    // `assistant.usage`. `session.idle`'s data has no fields we consume.
     session.send.mockImplementation(async () => {
-      session.emit('assistant.message_delta', { deltaContent: 'Hello ' });
-      session.emit('assistant.message_delta', { deltaContent: 'world' });
-      session.emit('session.idle', {
-        sessionId: 'sess-uuid-1',
-        usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
-      });
+      session.emit('session.start', { data: { sessionId: 'sess-uuid-1' } });
+      session.emit('assistant.message_delta', { data: { deltaContent: 'Hello ' } });
+      session.emit('assistant.message_delta', { data: { deltaContent: 'world' } });
+      session.emit('assistant.usage', { data: { inputTokens: 10, outputTokens: 5 } });
+      session.emit('session.idle', { data: {} });
     });
 
-    const { chunks, error } = await consume(
-      bridgeCopilotSession(session as never, 'hi')
-    );
+    const { chunks, error } = await consume(bridgeCopilotSession(session as never, 'hi'));
     expect(error).toBeUndefined();
     expect(chunks).toEqual([
       { type: 'assistant', content: 'Hello ' },
@@ -149,26 +148,33 @@ describe('bridgeCopilotSession', () => {
 
   test('emits thinking chunks from reasoning_delta events', async () => {
     session.send.mockImplementation(async () => {
-      session.emit('assistant.reasoning_delta', { deltaContent: 'pondering…' });
-      session.emit('session.idle', {});
+      session.emit('assistant.reasoning_delta', { data: { deltaContent: 'pondering…' } });
+      session.emit('session.idle', { data: {} });
     });
     const { chunks } = await consume(bridgeCopilotSession(session as never, 'hi'));
     expect(chunks[0]).toEqual({ type: 'thinking', content: 'pondering…' });
   });
 
   test('emits tool + tool_result chunks from execution events', async () => {
+    // The real SDK emits `arguments` (not `args`) and wraps result under a
+    // `{ content, detailedContent? }` object. The completion event carries
+    // only `toolCallId` — tool name is resolved via the start-event mapping.
     session.send.mockImplementation(async () => {
       session.emit('tool.execution_start', {
-        toolName: 'shell',
-        args: { cmd: 'ls' },
-        toolCallId: 'call-1',
+        data: {
+          toolName: 'shell',
+          arguments: { cmd: 'ls' },
+          toolCallId: 'call-1',
+        },
       });
       session.emit('tool.execution_complete', {
-        toolName: 'shell',
-        result: 'file.txt',
-        toolCallId: 'call-1',
+        data: {
+          toolCallId: 'call-1',
+          success: true,
+          result: { content: 'file.txt' },
+        },
       });
-      session.emit('session.idle', {});
+      session.emit('session.idle', { data: {} });
     });
     const { chunks } = await consume(bridgeCopilotSession(session as never, 'hi'));
     expect(chunks).toEqual([
@@ -179,23 +185,51 @@ describe('bridgeCopilotSession', () => {
         toolOutput: 'file.txt',
         toolCallId: 'call-1',
       },
-      { type: 'result' },
+      // The fake session's `id` seeds `lastSessionId` defensively, so the
+      // result chunk carries it even without an explicit session.start.
+      { type: 'result', sessionId: 'sess-uuid-1' },
     ]);
   });
 
-  test('prepends a system warning when a tool errors', async () => {
+  test('prefers detailedContent over content for tool_result output', async () => {
     session.send.mockImplementation(async () => {
-      session.emit('tool.execution_complete', {
-        toolName: 'shell',
-        result: 'error: permission denied',
-        toolCallId: 'call-1',
-        isError: true,
+      session.emit('tool.execution_start', {
+        data: { toolName: 'shell', arguments: {}, toolCallId: 'call-1' },
       });
-      session.emit('session.idle', {});
+      session.emit('tool.execution_complete', {
+        data: {
+          toolCallId: 'call-1',
+          success: true,
+          result: { content: 'short', detailedContent: 'full diff output here' },
+        },
+      });
+      session.emit('session.idle', { data: {} });
     });
     const { chunks } = await consume(bridgeCopilotSession(session as never, 'hi'));
-    expect(chunks[0]).toMatchObject({ type: 'system', content: expect.stringContaining('failed') });
-    expect(chunks[1]).toMatchObject({ type: 'tool_result', toolName: 'shell' });
+    expect(chunks[1]).toMatchObject({ type: 'tool_result', toolOutput: 'full diff output here' });
+  });
+
+  test('prepends a system warning when a tool errors (success:false)', async () => {
+    session.send.mockImplementation(async () => {
+      session.emit('tool.execution_start', {
+        data: { toolName: 'shell', arguments: {}, toolCallId: 'call-1' },
+      });
+      session.emit('tool.execution_complete', {
+        data: {
+          toolCallId: 'call-1',
+          success: false,
+          result: { content: 'error: permission denied' },
+        },
+      });
+      session.emit('session.idle', { data: {} });
+    });
+    const { chunks } = await consume(bridgeCopilotSession(session as never, 'hi'));
+    // chunks[0] is the 'tool' start chunk
+    expect(chunks[1]).toMatchObject({
+      type: 'system',
+      content: expect.stringContaining('failed'),
+    });
+    expect(chunks[2]).toMatchObject({ type: 'tool_result', toolName: 'shell' });
   });
 
   test('throws when an error event is emitted', async () => {
@@ -216,7 +250,7 @@ describe('bridgeCopilotSession', () => {
 
   test('removes listeners on completion', async () => {
     session.send.mockImplementation(async () => {
-      session.emit('session.idle', {});
+      session.emit('session.idle', { data: {} });
     });
     await consume(bridgeCopilotSession(session as never, 'hi'));
     // Each registered handler should have been removed.
@@ -227,7 +261,7 @@ describe('bridgeCopilotSession', () => {
     const ac = new AbortController();
     session.send.mockImplementation(async () => {
       ac.abort();
-      session.emit('session.idle', {});
+      session.emit('session.idle', { data: {} });
     });
     await consume(bridgeCopilotSession(session as never, 'hi', ac.signal));
     expect(session.disconnect.mock.calls.length).toBeGreaterThan(0);
@@ -235,23 +269,28 @@ describe('bridgeCopilotSession', () => {
 
   test('emits compaction_start as a system message', async () => {
     session.send.mockImplementation(async () => {
-      session.emit('session.compaction_start', {});
-      session.emit('session.idle', {});
+      session.emit('session.compaction_start', { data: {} });
+      session.emit('session.idle', { data: {} });
     });
     const { chunks } = await consume(bridgeCopilotSession(session as never, 'hi'));
-    expect(chunks[0]).toMatchObject({ type: 'system', content: expect.stringContaining('compact') });
+    expect(chunks[0]).toMatchObject({
+      type: 'system',
+      content: expect.stringContaining('compact'),
+    });
   });
 
   test('drops empty deltaContent', async () => {
     session.send.mockImplementation(async () => {
-      session.emit('assistant.message_delta', { deltaContent: '' });
-      session.emit('assistant.message_delta', { deltaContent: 'x' });
-      session.emit('session.idle', {});
+      session.emit('assistant.message_delta', { data: { deltaContent: '' } });
+      session.emit('assistant.message_delta', { data: { deltaContent: 'x' } });
+      session.emit('session.idle', { data: {} });
     });
     const { chunks } = await consume(bridgeCopilotSession(session as never, 'hi'));
     expect(chunks).toEqual([
       { type: 'assistant', content: 'x' },
-      { type: 'result' },
+      // `sessionId` comes from the fake session's `id` property (bridge
+      // seeds it defensively even without a session.start event).
+      { type: 'result', sessionId: 'sess-uuid-1' },
     ]);
   });
 });
