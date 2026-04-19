@@ -82,6 +82,23 @@ export interface PiProviderDefaults {
   env?: Record<string, string>;
 }
 
+/**
+ * Community provider defaults for GitHub Copilot (@github/copilot-sdk).
+ * SDK is in public preview; fields kept minimal to match capabilities wired
+ * in v1 (sessionResume, effortControl, envInjection).
+ */
+export interface CopilotProviderDefaults {
+  [key: string]: unknown;
+  /** Default model name, e.g. 'claude-sonnet-4.5', 'gpt-5', 'gpt-4.1'. */
+  model?: string;
+  /** Absolute path to the Copilot CLI binary. Overrides PATH lookup. */
+  cliPath?: string;
+  /** GitHub PAT with `copilot` scope. Overrides `gh auth login` state. */
+  githubToken?: string;
+  /** Default reasoning effort. Per-node `effort:` overrides this. */
+  reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh';
+}
+
 /** Generic per-provider defaults bag used by config surfaces and UI. */
 export type ProviderDefaults = Record<string, unknown>;
 

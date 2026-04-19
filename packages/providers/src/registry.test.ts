@@ -11,6 +11,7 @@ import {
   registerCommunityProviders,
   clearRegistry,
 } from './registry';
+import { registerCopilotProvider } from './community/copilot/registration';
 import { registerPiProvider } from './community/pi/registration';
 import { UnknownProviderError } from './errors';
 import type { ProviderRegistration, IAgentProvider, ProviderCapabilities } from './types';
@@ -275,16 +276,17 @@ describe('registry', () => {
   describe('registerCommunityProviders (aggregator)', () => {
     test('registers all bundled community providers', () => {
       registerCommunityProviders();
-      // Pi is currently the only community provider bundled. When more are
-      // added, they should appear here automatically.
       expect(isRegisteredProvider('pi')).toBe(true);
+      expect(isRegisteredProvider('copilot')).toBe(true);
     });
 
     test('is idempotent', () => {
       registerCommunityProviders();
       expect(() => registerCommunityProviders()).not.toThrow();
       const piCount = getRegisteredProviders().filter(p => p.id === 'pi').length;
+      const copilotCount = getRegisteredProviders().filter(p => p.id === 'copilot').length;
       expect(piCount).toBe(1);
+      expect(copilotCount).toBe(1);
     });
   });
 
@@ -350,6 +352,68 @@ describe('registry', () => {
         .map(p => p.id)
         .sort();
       expect(ids).toEqual(['claude', 'codex', 'pi']);
+    });
+  });
+
+  describe('registerCopilotProvider (community provider)', () => {
+    test('registers copilot with builtIn: false', () => {
+      registerCopilotProvider();
+      const reg = getRegistration('copilot');
+      expect(reg.id).toBe('copilot');
+      expect(reg.displayName).toBe('GitHub Copilot (community)');
+      expect(reg.builtIn).toBe(false);
+    });
+
+    test('is idempotent', () => {
+      registerCopilotProvider();
+      expect(() => registerCopilotProvider()).not.toThrow();
+      const entries = getRegisteredProviders().filter(p => p.id === 'copilot');
+      expect(entries).toHaveLength(1);
+    });
+
+    test('declares v1 capabilities (sessionResume, effortControl, envInjection)', () => {
+      registerCopilotProvider();
+      const caps = getProviderCapabilities('copilot');
+      // Flipped true in v1
+      expect(caps.sessionResume).toBe(true);
+      expect(caps.effortControl).toBe(true);
+      expect(caps.envInjection).toBe(true);
+      // Still false (out of v1 scope; flipped per follow-up PRs)
+      expect(caps.mcp).toBe(false);
+      expect(caps.hooks).toBe(false);
+      expect(caps.skills).toBe(false);
+      expect(caps.toolRestrictions).toBe(false);
+      expect(caps.structuredOutput).toBe(false);
+      expect(caps.thinkingControl).toBe(false);
+      expect(caps.costControl).toBe(false);
+      expect(caps.fallbackModel).toBe(false);
+      expect(caps.sandbox).toBe(false);
+    });
+
+    test('isModelCompatible accepts non-empty strings', () => {
+      registerCopilotProvider();
+      const reg = getRegistration('copilot');
+      expect(reg.isModelCompatible('claude-sonnet-4.5')).toBe(true);
+      expect(reg.isModelCompatible('gpt-5')).toBe(true);
+      expect(reg.isModelCompatible('gpt-4.1')).toBe(true);
+      expect(reg.isModelCompatible('any/custom-byok-string')).toBe(true);
+      expect(reg.isModelCompatible('')).toBe(false);
+    });
+
+    test('appears in getProviderInfoList with builtIn: false', () => {
+      registerCopilotProvider();
+      const info = getProviderInfoList().find(p => p.id === 'copilot');
+      expect(info).toBeDefined();
+      expect(info?.builtIn).toBe(false);
+    });
+
+    test('does not collide with built-ins or pi', () => {
+      registerPiProvider();
+      registerCopilotProvider();
+      const ids = getRegisteredProviders()
+        .map(p => p.id)
+        .sort();
+      expect(ids).toEqual(['claude', 'codex', 'copilot', 'pi']);
     });
   });
 });

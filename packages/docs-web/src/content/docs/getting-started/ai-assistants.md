@@ -374,6 +374,99 @@ Unsupported YAML fields trigger a visible warning from the dag-executor when the
 - [Adding a Community Provider](../contributing/adding-a-community-provider/) — the contributor-facing guide for extending Archon with your own provider.
 - [Pi on GitHub](https://github.com/badlogic/pi-mono) — upstream project.
 
+## GitHub Copilot (Community Provider)
+
+**GitHub's official agentic SDK.** Copilot (`@github/copilot-sdk`, public preview) is a community-maintained provider that wraps GitHub's Copilot CLI over JSON-RPC. It runs the same agent engine that powers `gh copilot` and the Copilot mobile app — file edits, shell execution, tool use, and durable sessions.
+
+Copilot is registered as `builtIn: false` because the SDK is in public preview (`0.2.x`) with explicit breaking-change warnings. Promotion to `builtIn: true` will follow once the SDK reaches GA and the integration proves stable.
+
+### Install
+
+The SDK ships as a Bun/npm dependency of `@archon/providers`. The `copilot` CLI binary itself is **not** bundled — install it separately:
+
+```bash
+gh extension install github/gh-copilot
+gh auth login   # or set COPILOT_GITHUB_TOKEN
+```
+
+If `copilot` isn't on `PATH`, point Archon at it explicitly via `assistants.copilot.cliPath` in `.archon/config.yaml` or the `COPILOT_CLI_PATH` env var.
+
+### Authenticate
+
+Three credential paths (priority high → low):
+
+1. `assistants.copilot.githubToken` in `.archon/config.yaml` (PAT with `copilot` scope).
+2. `COPILOT_GITHUB_TOKEN` env var (or `GH_TOKEN` / `GITHUB_TOKEN` — the CLI reads them).
+3. Whatever `gh auth login` / `copilot auth login` wrote to your shell's GitHub credential store.
+
+A Copilot subscription (Pro / Business / Enterprise / Free tier) is required unless you use BYOK with a custom provider configured in the Copilot CLI itself.
+
+### Models
+
+Copilot accepts named model strings:
+
+```yaml
+assistants:
+  copilot:
+    model: claude-sonnet-4.5    # Anthropic via Copilot
+    # model: gpt-5              # OpenAI
+    # model: gpt-4.1            # OpenAI
+    reasoningEffort: medium     # low | medium | high | xhigh
+```
+
+Archon does not validate model names client-side — the SDK rejects unknown models at runtime with a clear error. BYOK provider strings (custom OpenAI-compatible endpoints configured in the Copilot CLI) are also accepted.
+
+### Usage in workflows
+
+```yaml
+name: copilot-flow
+provider: copilot
+model: claude-sonnet-4.5
+
+nodes:
+  - id: think
+    provider: copilot
+    model: gpt-5
+    effort: high
+    prompt: "Plan the migration to async/await."
+
+  - id: write
+    provider: copilot
+    model: claude-sonnet-4.5
+    effort: medium
+    depends_on: [think]
+    prompt: "Implement the plan from $think.output."
+```
+
+### Copilot capabilities (v1)
+
+| Feature | Support | YAML field |
+|---|---|---|
+| Session resume | ✅ | automatic (Archon persists `sessionId`) |
+| Reasoning effort | ✅ | `effort: low\|medium\|high\|max` (max → xhigh) |
+| Codebase env vars (`envInjection`) | ✅ | `.archon/config.yaml` `env:` section |
+| MCP servers | ❌ | follow-up — SDK exposes `mcp` permission type but config path TBD |
+| Tool restrictions | ❌ | follow-up — `allowed_tools`/`denied_tools` not yet mapped |
+| Skills | ❌ | no SDK system-prompt slot in current preview |
+| Structured output | ❌ | not in current SDK |
+| Thinking control (separate from effort) | ❌ | not in current SDK |
+| Cost limits (`maxBudgetUsd`) | ❌ | SDK doesn't surface per-request cost |
+| Fallback model | ❌ | not in current SDK |
+| Sandbox / hooks | ❌ | not in current SDK |
+
+Unsupported YAML fields trigger a visible warning from the dag-executor when the workflow runs, so you always know what was ignored. Capabilities will be flipped on as their plumbing lands in follow-up PRs.
+
+### Caveats
+
+- **Public preview.** SDK pinned at exact `0.2.2` because the project warns about breaking changes between minor versions.
+- **CLI binary required.** Unlike Claude/Codex/Pi, the Copilot SDK spawns the `copilot` CLI process per call. Make sure the binary is reachable in every environment Archon runs in (local, Docker, CI).
+- **`approveAll` permission policy.** Copilot's permission callback is hard-wired to `approveAll` in v1, matching the trust model already provided by Archon's worktree isolation. A `copilotPermissionMode` option for stricter modes is a follow-up.
+
+### See also
+
+- [Adding a Community Provider](../contributing/adding-a-community-provider/) — the contributor-facing guide.
+- [@github/copilot-sdk on GitHub](https://github.com/github/copilot-sdk) — upstream project.
+
 ## How Assistant Selection Works
 
 - Assistant type is set per codebase via the `assistant` field in `.archon/config.yaml` or the `DEFAULT_AI_ASSISTANT` env var
