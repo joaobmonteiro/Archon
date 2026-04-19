@@ -16,7 +16,7 @@ Medium. Not a crash — workflows continue to run — but the per-node AI overri
 
 ### Summary
 
-The DAG node schema parser strips all `aiOnly` fields (`provider`, `model`, `effort`, `thinking`, `mcp`, `hooks`, `skills`, `allowed_tools`, `denied_tools`, `output_format`, `maxBudgetUsd`, `systemPrompt`, `fallbackModel`, `betas`, `sandbox`, `context`) when constructing a `LoopNode`. The DAG executor, however, *does* try to read `node.provider` and `node.model` for loop nodes — so schema and dispatcher are inconsistent: dispatcher expects the fields, schema doesn't preserve them.
+The DAG node schema parser strips all `aiOnly` fields (`provider`, `model`, `effort`, `thinking`, `mcp`, `hooks`, `skills`, `allowed_tools`, `denied_tools`, `output_format`, `maxBudgetUsd`, `systemPrompt`, `fallbackModel`, `betas`, `sandbox`, `context`) when constructing a `LoopNode`. The DAG executor, however, _does_ try to read `node.provider` and `node.model` for loop nodes — so schema and dispatcher are inconsistent: dispatcher expects the fields, schema doesn't preserve them.
 
 Net effect: setting `provider: copilot` (or any per-node AI override) on a `loop:` node has no effect. The workflow-level provider is used instead.
 
@@ -26,13 +26,13 @@ Minimal workflow YAML:
 
 ```yaml
 name: repro-loop-provider-override
-provider: claude                     # workflow-level default
+provider: claude # workflow-level default
 
 nodes:
   - id: my-loop
-    provider: copilot                # <-- silently stripped by schema
+    provider: copilot # <-- silently stripped by schema
     loop:
-      prompt: "Reply with DONE."
+      prompt: 'Reply with DONE.'
       until: DONE
       max_iterations: 1
 ```
@@ -183,7 +183,7 @@ const cliPath = copilotConfig.cliPath ?? process.env.COPILOT_CLI_PATH;
 
 const clientOptions: CopilotClientOptions = {
   cwd,
-  ...(cliPath ? { cliPath } : {}),          // if unset, SDK's default kicks in
+  ...(cliPath ? { cliPath } : {}), // if unset, SDK's default kicks in
   ...(githubToken ? { githubToken } : {}),
   ...(childEnv ? { env: childEnv } : {}),
 };
@@ -224,9 +224,7 @@ Then in `sendQuery`:
 
 ```ts
 const cliPath =
-  copilotConfig.cliPath ??
-  process.env.COPILOT_CLI_PATH ??
-  resolveNativeCopilotBinary();   // NEW: prefer native binary over JS loader
+  copilotConfig.cliPath ?? process.env.COPILOT_CLI_PATH ?? resolveNativeCopilotBinary(); // NEW: prefer native binary over JS loader
 ```
 
 With the native binary resolved to something like `/app/node_modules/@github/copilot-linux-x64/copilot`, the SDK's spawn path will detect `.endsWith('.js')` is false and execute the binary directly — no Node runtime, no Bun shim, no `node:sea` issue.

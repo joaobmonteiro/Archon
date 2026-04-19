@@ -10,6 +10,7 @@ import type {
 } from '../../types';
 
 import { COPILOT_CAPABILITIES } from './capabilities';
+import { resolveCopilotCliPath } from './cli-resolver';
 import { parseCopilotConfig } from './config';
 import { bridgeCopilotSession } from './event-bridge';
 import { resolveCopilotEffort, resolveCopilotEnv } from './options-translator';
@@ -71,11 +72,13 @@ export class CopilotProvider implements IAgentProvider {
 
     // 3. Construct the Copilot client. `cwd` is pinned at construction time
     //    by the SDK, so a per-call client lifecycle is required to support
-    //    different worktrees. `cliPath` resolution order:
-    //      1. assistantConfig.cliPath
+    //    different worktrees. `cliPath` resolution (see ./cli-resolver.ts):
+    //      1. assistantConfig.cliPath (YAML-configured)
     //      2. COPILOT_CLI_PATH env var
-    //      3. SDK's PATH lookup
-    const cliPath = copilotConfig.cliPath ?? process.env.COPILOT_CLI_PATH;
+    //      3. platform-specific native binary bundled in node_modules
+    //         (avoids the Bun-vs-Node:sea incompat for the default JS loader)
+    //      4. undefined → SDK's own fallback to the JS loader runs next
+    const cliPath = resolveCopilotCliPath(copilotConfig.cliPath);
     const githubToken = copilotConfig.githubToken ?? process.env.COPILOT_GITHUB_TOKEN;
 
     const clientOptions: CopilotClientOptions = {
