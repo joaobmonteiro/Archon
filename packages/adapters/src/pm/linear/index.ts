@@ -1,0 +1,1 @@
+export { LinearAdapter } from './adapter';

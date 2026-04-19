@@ -60,7 +60,13 @@ registerCommunityProviders();
 
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { validationErrorHook } from './routes/openapi-defaults';
-import { TelegramAdapter, GitHubAdapter, DiscordAdapter, SlackAdapter } from '@archon/adapters';
+import {
+  TelegramAdapter,
+  GitHubAdapter,
+  DiscordAdapter,
+  SlackAdapter,
+  LinearAdapter,
+} from '@archon/adapters';
 import { GiteaAdapter } from '@archon/adapters/community/forge/gitea';
 import { GitLabAdapter } from '@archon/adapters/community/forge/gitlab';
 import { WebAdapter } from './adapters/web';
@@ -76,6 +82,7 @@ import {
   startCleanupScheduler,
   stopCleanupScheduler,
   loadConfig,
+  loadGlobalConfig,
   logConfig,
   getPort,
 } from '@archon/core';
@@ -263,6 +270,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   let gitlab: GitLabAdapter | null = null;
   let discord: DiscordAdapter | null = null;
   let slack: SlackAdapter | null = null;
+  let linear: LinearAdapter | null = null;
 
   if (!opts.skipPlatformAdapters) {
     // Check that at least one platform is configured
@@ -273,8 +281,9 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       process.env.GITEA_URL && process.env.GITEA_TOKEN && process.env.GITEA_WEBHOOK_SECRET
     );
     const hasGitLab = Boolean(process.env.GITLAB_TOKEN && process.env.GITLAB_WEBHOOK_SECRET);
+    const hasLinear = Boolean(process.env.LINEAR_API_KEY && process.env.LINEAR_WEBHOOK_SECRET);
 
-    if (!hasTelegram && !hasDiscord && !hasGitHub && !hasGitea && !hasGitLab) {
+    if (!hasTelegram && !hasDiscord && !hasGitHub && !hasGitea && !hasGitLab && !hasLinear) {
       getLog().warn('no_platform_adapters_configured');
     }
 
@@ -441,6 +450,20 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     } else {
       getLog().info('slack_adapter_skipped');
     }
+
+    // Initialize Linear adapter (conditional)
+    if (process.env.LINEAR_API_KEY && process.env.LINEAR_WEBHOOK_SECRET) {
+      const globalConfig = await loadGlobalConfig();
+      linear = new LinearAdapter(
+        process.env.LINEAR_API_KEY,
+        process.env.LINEAR_WEBHOOK_SECRET,
+        lockManager,
+        globalConfig.linear ?? {}
+      );
+      await linear.start();
+    } else {
+      getLog().info('linear.adapter_skipped');
+    }
   } else {
     getLog().info('platform_adapters_skipped');
   }
@@ -541,6 +564,32 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       }
     });
     getLog().info('gitlab_webhook_registered');
+  }
+
+  // Linear webhook endpoint
+  if (linear) {
+    app.post('/webhooks/linear', async c => {
+      try {
+        const signature = c.req.header('linear-signature');
+        if (!signature) {
+          return c.json({ error: 'Missing signature header' }, 400);
+        }
+
+        // CRITICAL: Use c.req.text() for raw body (signature verification)
+        const payload = await c.req.text();
+
+        // Process async (fire-and-forget for fast webhook response)
+        linear.handleWebhook(payload, signature).catch((error: unknown) => {
+          getLog().error({ err: error }, 'linear.webhook_processing_error');
+        });
+
+        return c.text('OK', 200);
+      } catch (error) {
+        getLog().error({ err: error }, 'linear.webhook_endpoint_error');
+        return c.json({ error: 'Internal server error' }, 500);
+      }
+    });
+    getLog().info('linear.webhook_registered');
   }
 
   // Health check endpoints
