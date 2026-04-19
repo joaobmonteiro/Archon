@@ -1497,6 +1497,15 @@ nodes:
       const node = result.workflows[0].workflow.nodes[0];
       expect(isLoopNode(node)).toBe(true);
 
+      // model and provider must round-trip through the schema transform — the
+      // dag-executor dispatches each iteration based on node.provider/node.model,
+      // so silently dropping them in the transform is the original BUG.md#1
+      // bug. Assert both are preserved on the parsed node.
+      if (isLoopNode(node)) {
+        expect(node.provider).toBe('claude');
+        expect(node.model).toBe('claude-opus-4-6');
+      }
+
       // model and provider should NOT trigger a warning
       const warnCalls = (mockLogger.warn as Mock<() => undefined>).mock.calls;
       const aiFieldWarnings = warnCalls.filter(

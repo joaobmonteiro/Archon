@@ -523,8 +523,8 @@ export const dagNodeSchema = dagNodeBaseSchema
       });
     }
 
-    // Provider/model compatibility (AI nodes only)
-    if (!hasBash && !hasLoop && !hasScript && data.provider && data.model) {
+    // Provider/model compatibility (AI nodes + loop nodes — loops honor per-node provider/model too).
+    if (!hasBash && !hasScript && data.provider && data.model) {
       try {
         if (!isModelCompatible(data.provider, data.model)) {
           ctx.addIssue({
@@ -613,9 +613,19 @@ export const dagNodeSchema = dagNodeBaseSchema
     if (data.cancel !== undefined && data.cancel.trim().length > 0) {
       return { ...base, ...shared, cancel: data.cancel.trim() } as CancelNode;
     }
-    // loop — guaranteed by superRefine to be defined at this point
+    // loop — guaranteed by superRefine to be defined at this point.
+    // Only `provider` and `model` round-trip to loop nodes; the dag-executor
+    // reads them for dispatch and per-iteration model-compatibility checks
+    // (see LOOP_NODE_AI_FIELDS below — every other aiOnly field is flagged
+    // as ignored by the loader warning). `shared` (retry) applies too.
     if (!data.loop) throw new Error('unreachable: loop must be defined after superRefine');
-    return { ...base, loop: data.loop } as LoopNode;
+    return {
+      ...base,
+      ...shared,
+      ...(data.model !== undefined ? { model: data.model } : {}),
+      ...(data.provider !== undefined ? { provider: data.provider } : {}),
+      loop: data.loop,
+    } as LoopNode;
   })
   .openapi('DagNode');
 
