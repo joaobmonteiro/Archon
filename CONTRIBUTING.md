@@ -10,6 +10,20 @@ Thank you for your interest in contributing to Archon!
 4. Copy `.env.example` to `.env` and configure
 5. Start development: `bun run dev`
 
+### Reproducible toolchain via Devbox (optional)
+
+Don't want to install bun, gh, jq, postgres-client, python, and uv yourself? The repo ships a `devbox.json` that pins all of them via Nix.
+
+```bash
+# 1. Install devbox once: https://www.jetify.com/devbox/docs/installing_devbox/
+# 2. From the repo root:
+devbox shell                   # drops you into a shell with the pinned toolchain
+bun install                    # then proceed normally
+bun run validate
+```
+
+`devbox.json` pins `bun` to the same version (`1.3.11`) the production `Dockerfile` uses, so local validation matches CI.
+
 ## Development Workflow
 
 ### Code Quality
