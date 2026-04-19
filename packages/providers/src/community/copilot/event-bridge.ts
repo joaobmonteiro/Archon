@@ -73,48 +73,83 @@ export function serializeToolResult(result: unknown): string {
   try {
     return JSON.stringify(result);
   } catch {
+    // JSON.stringify can throw on circular refs or BigInt. Objects' default
+    // toString yields '[object Object]', which isn't useful — but it's the
+    // best we can offer without a dedicated inspector, and the caller is
+    // already consuming a malformed tool result.
+    // eslint-disable-next-line @typescript-eslint/no-base-to-string
     return String(result);
   }
 }
 
 /**
- * Pull `toolName`/`args`/`callId` from a Copilot tool event in a
- * structurally-defensive way. The SDK's exact event shape isn't strongly
- * typed in @github/copilot-sdk's public types (it varies by tool kind);
- * this helper keeps the assumption-points in one place.
+ * Every Copilot SDK session event wraps its payload under a `data` property:
+ * `{ type: 'tool.execution_start', data: { toolCallId, toolName, arguments } }`.
+ * Unwrap it in one place so every handler reads at the right nesting level.
+ *
+ * See `@github/copilot-sdk/dist/generated/session-events.d.ts` for the full
+ * schema — every union member declares `type` + `data`.
  */
-function extractToolEventFields(event: unknown): {
+function unwrapEventData(event: unknown): Record<string, unknown> {
+  if (event === null || typeof event !== 'object') return {};
+  const data = (event as { data?: unknown }).data;
+  if (data !== null && typeof data === 'object') return data as Record<string, unknown>;
+  return {};
+}
+
+/**
+ * Pull `toolName`, `arguments`, and `toolCallId` from a `tool.execution_start`
+ * payload. The SDK guarantees these fields on start events, but defensively
+ * fall back to `unknown` / `{}` / `undefined` so a malformed event can't crash
+ * the bridge.
+ */
+function extractToolStartFields(event: unknown): {
   toolName: string;
   toolInput: Record<string, unknown>;
   toolCallId: string | undefined;
-  result?: unknown;
-  isError?: boolean;
 } {
-  const e = (event ?? {}) as Record<string, unknown>;
-  const toolName =
-    typeof e.toolName === 'string'
-      ? e.toolName
-      : typeof e.name === 'string'
-        ? e.name
-        : 'unknown';
-  const args = e.args ?? e.arguments ?? e.input ?? {};
+  const data = unwrapEventData(event);
+  const toolName = typeof data.toolName === 'string' ? data.toolName : 'unknown';
+  const rawArgs = data.arguments;
   const toolInput =
-    typeof args === 'object' && args !== null ? (args as Record<string, unknown>) : {};
-  const toolCallId =
-    typeof e.toolCallId === 'string'
-      ? e.toolCallId
-      : typeof e.id === 'string'
-        ? e.id
-        : undefined;
-  const result = e.result;
-  const isError = typeof e.isError === 'boolean' ? e.isError : undefined;
-  return {
-    toolName,
-    toolInput,
-    toolCallId,
-    ...(result !== undefined ? { result } : {}),
-    ...(isError !== undefined ? { isError } : {}),
-  };
+    rawArgs !== null && typeof rawArgs === 'object' ? (rawArgs as Record<string, unknown>) : {};
+  const toolCallId = typeof data.toolCallId === 'string' ? data.toolCallId : undefined;
+  return { toolName, toolInput, toolCallId };
+}
+
+/**
+ * Pull `toolCallId`, success flag, and flattened `result` text from a
+ * `tool.execution_complete` payload. The SDK's result is an object
+ * (`{ content, detailedContent?, contents? }`) — prefer `detailedContent`
+ * (full output for UI/timeline) over `content` (truncated LLM-facing text).
+ * Completion events do NOT carry `toolName`; callers map `toolCallId` back
+ * via the per-session map built on start events.
+ */
+function extractToolCompleteFields(event: unknown): {
+  toolCallId: string | undefined;
+  resultText: string;
+  isError: boolean;
+} {
+  const data = unwrapEventData(event);
+  const toolCallId = typeof data.toolCallId === 'string' ? data.toolCallId : undefined;
+  const success = data.success;
+  const isError = typeof success === 'boolean' ? !success : false;
+
+  const result = data.result;
+  let resultText = '';
+  if (typeof result === 'string') {
+    resultText = result;
+  } else if (result !== null && typeof result === 'object') {
+    const r = result as { detailedContent?: unknown; content?: unknown };
+    if (typeof r.detailedContent === 'string') {
+      resultText = r.detailedContent;
+    } else if (typeof r.content === 'string') {
+      resultText = r.content;
+    } else {
+      resultText = serializeToolResult(result);
+    }
+  }
+  return { toolCallId, resultText, isError };
 }
 
 /**
@@ -144,19 +179,15 @@ export async function* bridgeCopilotSession(
   // Untyped `on` shim — the SDK's event names are documented but not all
   // strongly typed in the published .d.ts. Using a single typed indirection
   // keeps the cast auditable in one place.
-  const on = (
-    event: string,
-    handler: (payload: unknown) => void
-  ): void => {
-    (session as unknown as {
-      on(event: string, handler: (payload: unknown) => void): void;
-    }).on(event, handler);
+  const on = (event: string, handler: (payload: unknown) => void): void => {
+    (
+      session as unknown as {
+        on(event: string, handler: (payload: unknown) => void): void;
+      }
+    ).on(event, handler);
   };
 
-  const off = (
-    event: string,
-    handler: (payload: unknown) => void
-  ): void => {
+  const off = (event: string, handler: (payload: unknown) => void): void => {
     const sess = session as unknown as {
       off?(event: string, handler: (payload: unknown) => void): void;
       removeListener?(event: string, handler: (payload: unknown) => void): void;
@@ -165,7 +196,7 @@ export async function* bridgeCopilotSession(
     else if (sess.removeListener) sess.removeListener(event, handler);
   };
 
-  const handlers: Array<[string, (payload: unknown) => void]> = [];
+  const handlers: [string, (payload: unknown) => void][] = [];
   const register = (event: string, handler: (payload: unknown) => void): void => {
     handlers.push([event, handler]);
     on(event, handler);
@@ -173,16 +204,39 @@ export async function* bridgeCopilotSession(
 
   let lastSessionId: string | undefined =
     typeof (session as unknown as { id?: unknown }).id === 'string'
-      ? ((session as unknown as { id: string }).id)
+      ? (session as unknown as { id: string }).id
       : undefined;
   let lastTokens: TokenUsage | undefined;
+
+  // Completion events don't carry `toolName` — only `toolCallId`. Track the
+  // mapping from start events so `tool_result` chunks can report the real
+  // tool name instead of "unknown".
+  const toolCallIdToName = new Map<string, string>();
+
+  // Session lifecycle: capture sessionId for resume support. The terminal
+  // `session.idle` event does NOT carry sessionId — it's published on
+  // `session.start` at the beginning of a turn.
+  register('session.start', payload => {
+    const data = unwrapEventData(payload);
+    if (typeof data.sessionId === 'string') lastSessionId = data.sessionId;
+  });
+
+  // Per-turn token usage. The SDK emits this once per LLM API call; for a
+  // multi-call turn we keep the latest. `session.usage_info` is *context
+  // window* stats (different thing) — ignored here.
+  register('assistant.usage', payload => {
+    const data = unwrapEventData(payload);
+    const input = typeof data.inputTokens === 'number' ? data.inputTokens : 0;
+    const output = typeof data.outputTokens === 'number' ? data.outputTokens : 0;
+    lastTokens = { input, output, total: input + output };
+  });
 
   // Streaming text deltas — accumulate into 'assistant' chunks per delta.
   register('assistant.message_delta', payload => {
     try {
-      const e = (payload ?? {}) as { deltaContent?: unknown };
-      if (typeof e.deltaContent === 'string' && e.deltaContent.length > 0) {
-        queue.push({ kind: 'chunk', chunk: { type: 'assistant', content: e.deltaContent } });
+      const data = unwrapEventData(payload);
+      if (typeof data.deltaContent === 'string' && data.deltaContent.length > 0) {
+        queue.push({ kind: 'chunk', chunk: { type: 'assistant', content: data.deltaContent } });
       }
     } catch (err) {
       queue.push({ kind: 'error', error: err as Error });
@@ -192,19 +246,23 @@ export async function* bridgeCopilotSession(
   // Reasoning / chain-of-thought deltas.
   register('assistant.reasoning_delta', payload => {
     try {
-      const e = (payload ?? {}) as { deltaContent?: unknown };
-      if (typeof e.deltaContent === 'string' && e.deltaContent.length > 0) {
-        queue.push({ kind: 'chunk', chunk: { type: 'thinking', content: e.deltaContent } });
+      const data = unwrapEventData(payload);
+      if (typeof data.deltaContent === 'string' && data.deltaContent.length > 0) {
+        queue.push({ kind: 'chunk', chunk: { type: 'thinking', content: data.deltaContent } });
       }
     } catch (err) {
       queue.push({ kind: 'error', error: err as Error });
     }
   });
 
-  // Tool execution start → 'tool' chunk.
+  // Tool execution start → 'tool' chunk. Also record the call-id → name
+  // mapping so the matching completion event can report the real tool name.
   register('tool.execution_start', payload => {
     try {
-      const fields = extractToolEventFields(payload);
+      const fields = extractToolStartFields(payload);
+      if (fields.toolCallId !== undefined) {
+        toolCallIdToName.set(fields.toolCallId, fields.toolName);
+      }
       queue.push({
         kind: 'chunk',
         chunk: {
@@ -222,22 +280,27 @@ export async function* bridgeCopilotSession(
   // Tool execution complete → 'tool_result' chunk (+ system warning if errored).
   register('tool.execution_complete', payload => {
     try {
-      const fields = extractToolEventFields(payload);
+      const fields = extractToolCompleteFields(payload);
+      const toolName =
+        (fields.toolCallId !== undefined ? toolCallIdToName.get(fields.toolCallId) : undefined) ??
+        'unknown';
       if (fields.isError) {
         queue.push({
           kind: 'chunk',
-          chunk: { type: 'system', content: `⚠️ Tool ${fields.toolName} failed` },
+          chunk: { type: 'system', content: `⚠️ Tool ${toolName} failed` },
         });
       }
       queue.push({
         kind: 'chunk',
         chunk: {
           type: 'tool_result',
-          toolName: fields.toolName,
-          toolOutput: serializeToolResult(fields.result),
+          toolName,
+          toolOutput: fields.resultText,
           ...(fields.toolCallId !== undefined ? { toolCallId: fields.toolCallId } : {}),
         },
       });
+      // Free the map entry once we've reported the result.
+      if (fields.toolCallId !== undefined) toolCallIdToName.delete(fields.toolCallId);
     } catch (err) {
       queue.push({ kind: 'error', error: err as Error });
     }
@@ -252,25 +315,10 @@ export async function* bridgeCopilotSession(
     });
   });
 
-  // Session idle = end of turn. Pull session id + token usage if surfaced.
-  register('session.idle', payload => {
-    try {
-      const e = (payload ?? {}) as {
-        sessionId?: unknown;
-        usage?: { inputTokens?: unknown; outputTokens?: unknown; totalTokens?: unknown };
-      };
-      if (typeof e.sessionId === 'string') lastSessionId = e.sessionId;
-      if (e.usage && typeof e.usage === 'object') {
-        const u = e.usage;
-        const input = typeof u.inputTokens === 'number' ? u.inputTokens : 0;
-        const output = typeof u.outputTokens === 'number' ? u.outputTokens : 0;
-        const total = typeof u.totalTokens === 'number' ? u.totalTokens : input + output;
-        lastTokens = { input, output, total };
-      }
-      queue.push({ kind: 'done', sessionId: lastSessionId, tokens: lastTokens });
-    } catch (err) {
-      queue.push({ kind: 'error', error: err as Error });
-    }
+  // Session idle = end of turn. SessionId/usage are captured from
+  // `session.start`/`assistant.usage` respectively (they're not on idle).
+  register('session.idle', () => {
+    queue.push({ kind: 'done', sessionId: lastSessionId, tokens: lastTokens });
   });
 
   // SDK error event — propagate as a thrown error to the consumer.

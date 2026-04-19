@@ -1,10 +1,11 @@
 # Bugs surfaced by the Copilot E2E test
 
-Two issues found while wiring `feat/copilot-sdk-provider` into a real end-to-end
+Three issues found while wiring `feat/copilot-sdk-provider` into a real end-to-end
 run (Linear → archon → `hmq-backend-pipeline-copilot.yaml` → Copilot CLI).
 
 1. [Per-node `provider` / `model` / `effort` overrides silently dropped on loop nodes](#1-per-node-provider--model--effort-overrides-silently-dropped-on-loop-nodes)
 2. [Copilot provider can't locate its own bundled CLI when the runtime is Bun](#2-copilot-provider-cant-locate-its-own-bundled-cli-when-the-runtime-is-bun)
+3. [Copilot event-bridge reads SDK event payloads at the wrong nesting level](#3-copilot-event-bridge-reads-sdk-event-payloads-at-the-wrong-nesting-level)
 
 ---
 
@@ -251,3 +252,100 @@ Surfaced during the first Copilot E2E trigger after wiring `awf-copilot-smoke.ya
 4. Setting `assistants.copilot.cliPath: /app/node_modules/@github/copilot-linux-x64/copilot` resolved the issue.
 
 The required path is deployment-specific (`/app/...` here) and fragile, so baking it into user-facing configuration is a poor UX. The provider should do this resolution automatically.
+
+---
+
+## 3. Copilot event-bridge reads SDK event payloads at the wrong nesting level
+
+### Severity
+
+Medium. Runs don't fail, but **every tool call recorded for a Copilot session appears in the Web UI with `toolName: "unknown"` and empty `toolInput: {}`** — users can see a tool fired but not what it did. Also affects session-resume (sessionId is never captured) and token/cost telemetry (usage is never captured).
+
+### Summary
+
+`@github/copilot-sdk` emits strongly-typed events with the payload wrapped under a `.data` property:
+
+```ts
+{ type: "tool.execution_start", data: { toolCallId, toolName, arguments } }
+{ type: "tool.execution_complete", data: { toolCallId, success, result: { content, detailedContent? } } }
+{ type: "assistant.message_delta", data: { deltaContent, ... } }
+{ type: "assistant.reasoning_delta", data: { deltaContent, ... } }
+{ type: "session.start", data: { sessionId, ... } }
+{ type: "session.idle", data: { aborted? } }
+{ type: "assistant.usage", data: { inputTokens, outputTokens, ... } }
+```
+
+Archon's event-bridge (`packages/providers/src/community/copilot/event-bridge.ts`) reads **at the top level** of the payload (`e.toolName`, `e.deltaContent`, `e.sessionId`, `e.usage`). None of those are at the top level in the real events — they're all inside `data`.
+
+Compounding issues:
+
+- `tool.execution_complete` does **not** carry `toolName` (only `toolCallId`). The bridge needs a `toolCallId → toolName` map populated on `tool.execution_start` to emit correct `tool_result` chunks. Currently the completion handler looks for `toolName` on the event and falls back to `"unknown"`.
+- The `result` field in completion events is an object (`{ content, detailedContent?, contents? }`), not a string. The bridge `JSON.stringify`s the whole object, losing the human-readable text.
+- `session.idle` doesn't contain `sessionId` or `usage`. Session IDs come from `session.start`; per-turn usage comes from `assistant.usage`. The bridge subscribes to neither.
+
+Net effect for the user: Web UI shows generic "unknown" tool rows for the entire Copilot loop, and downstream session-resume / cost-tracking paths never see real values.
+
+### Reproduction
+
+Any workflow that routes a node to Copilot and uses tools will exhibit this. Observed in the `awf-copilot-smoke.yaml` run:
+
+- `provider.copilot` session logs show a successful run with `copilot.prompt_completed`.
+- The Copilot CLI's own log (`~/.copilot/logs/*.log`) shows real tool names and results (`pwd`, `ls`, etc.) and a full assistant message ending in `COPILOT_SMOKE_OK`.
+- But `SELECT * FROM remote_agent_workflow_events WHERE workflow_run_id = ...` returns:
+  ```
+  tool_called    | {"tool_name": "unknown", "tool_input": {}}
+  tool_completed | {"tool_name": "unknown", "duration_ms": 4}
+  tool_called    | {"tool_name": "unknown", "tool_input": {}}
+  tool_completed | {"tool_name": "unknown", "duration_ms": 18810}
+  ...
+  ```
+- The UI renders these as opaque rows.
+
+The existing event-bridge tests (`event-bridge.test.ts`) pass against the current implementation because they **mock a flat payload shape** that never existed in the real SDK — so the shape mismatch is never exercised in CI.
+
+### Root cause
+
+**File:** `packages/providers/src/community/copilot/event-bridge.ts`
+
+Representative snippet (the tool handler — same shape bug is repeated in every payload handler):
+
+```ts
+// line 93-108 — reads toolName/args at the top level
+function extractToolEventFields(event: unknown) {
+  const e = (event ?? {}) as Record<string, unknown>;
+  const toolName = typeof e.toolName === 'string' ? e.toolName
+                 : typeof e.name === 'string' ? e.name : 'unknown';
+  const args = e.args ?? e.arguments ?? e.input ?? {};
+  const toolCallId = typeof e.toolCallId === 'string' ? e.toolCallId : ...;
+  const result = e.result;   // ← would be the whole data object, but e.result is undefined
+  const isError = typeof e.isError === 'boolean' ? e.isError : undefined;
+  return { toolName, toolInput, toolCallId, result, isError };
+}
+```
+
+At runtime the event delivered to `.on('tool.execution_start', …)` is `{ type, data, ephemeral?, ... }`, so every guess above falls through to its default.
+
+Same pattern in:
+
+- `'assistant.message_delta'` (line 181) — reads `e.deltaContent`; real shape is `e.data.deltaContent`.
+- `'assistant.reasoning_delta'` (line 193) — same.
+- `'session.idle'` (line 256) — reads `e.sessionId` and `e.usage`; neither exists on `session.idle` at all (sessionId is in `session.start`, usage is in `assistant.usage`).
+
+### Suggested fix
+
+Three coordinated changes:
+
+1. **Unwrap `data` in every handler.** Introduce a small `unwrapEventData(evt)` helper that returns `(evt?.data ?? {}) as Record<string, unknown>`, and use it in `extractToolEventFields` plus every handler that reads payload fields.
+2. **Track tool-call IDs.** Capture `{ toolCallId → toolName }` on `tool.execution_start`; look it up on `tool.execution_complete` so `tool_result` chunks carry the real tool name. Also prefer `result.detailedContent ?? result.content` for the `toolOutput` string (the nested object is not useful to the UI as JSON).
+3. **Subscribe to the right lifecycle events.** Capture `sessionId` from `session.start` and per-turn usage from `assistant.usage`; `session.idle` becomes the "end of turn" marker with no field reads.
+
+Minimum surface area; no public contract changes outside this module. The `MessageChunk` consumer shape already expects `toolName`/`toolInput`/`toolOutput`, we're just populating them correctly.
+
+### Affected code
+
+- `packages/providers/src/community/copilot/event-bridge.ts` (lines 86-281 — every handler that reads fields, plus `extractToolEventFields`).
+- `packages/providers/src/community/copilot/event-bridge.test.ts` — the mock emit payloads need to match the real wrapped shape `{ type, data: {...} }`. Two tests were already failing against the current implementation (`emits tool + tool_result chunks from execution events`, `drops empty deltaContent`) — the shape fix resolves them along the way.
+
+### Discovery
+
+Noticed while reviewing DB events during the `awf-copilot-smoke.yaml` E2E run and again during the `hmq-backend-pipeline-copilot.yaml` re-test: every single `tool_called`/`tool_completed` row shows `tool_name: "unknown"` and `tool_input: {}` even though the Copilot CLI's own session log confirms real tool executions with proper names and arguments. Cross-checked against `@github/copilot-sdk@0.2.2`'s generated `session-events.d.ts`, which declares the `data` wrapper on every event type; archon reads at the wrong level throughout.

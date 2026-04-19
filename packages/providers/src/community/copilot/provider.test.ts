@@ -53,7 +53,9 @@ let startImpl: () => Promise<void> = async () => undefined;
 const mockClientStart = mock(async () => startImpl());
 const mockClientStop = mock(async () => undefined);
 const mockCreateSession = mock(async (config: unknown) => createSessionImpl(config));
-const mockResumeSession = mock(async (id: string, config: unknown) => resumeSessionImpl(id, config));
+const mockResumeSession = mock(async (id: string, config: unknown) =>
+  resumeSessionImpl(id, config)
+);
 
 class MockCopilotClient {
   constructor(opts: unknown) {
@@ -165,20 +167,19 @@ describe('CopilotProvider', () => {
 
   test('uses approveAll for permission requests', async () => {
     fakeSession.send.mockImplementation(async () => fakeSession.emit('session.idle', {}));
-    await consume(
-      new CopilotProvider().sendQuery('hi', '/repo', undefined, { model: 'gpt-5' })
-    );
+    await consume(new CopilotProvider().sendQuery('hi', '/repo', undefined, { model: 'gpt-5' }));
     const config = mockCreateSession.mock.calls[0]?.[0] as { onPermissionRequest?: unknown };
     expect(config.onPermissionRequest).toBe(mockApproveAll);
   });
 
   test('streams a result chunk with sessionId after idle', async () => {
+    // SDK event shape: payload wrapped under `data`. Session ID is published
+    // on `session.start`, per-turn usage on `assistant.usage`.
     fakeSession.send.mockImplementation(async () => {
-      fakeSession.emit('assistant.message_delta', { deltaContent: 'hi!' });
-      fakeSession.emit('session.idle', {
-        sessionId: 'sess-uuid-42',
-        usage: { inputTokens: 3, outputTokens: 1, totalTokens: 4 },
-      });
+      fakeSession.emit('session.start', { data: { sessionId: 'sess-uuid-42' } });
+      fakeSession.emit('assistant.message_delta', { data: { deltaContent: 'hi!' } });
+      fakeSession.emit('assistant.usage', { data: { inputTokens: 3, outputTokens: 1 } });
+      fakeSession.emit('session.idle', { data: {} });
     });
     const { chunks, error } = await consume(
       new CopilotProvider().sendQuery('hi', '/repo', undefined, { model: 'gpt-5' })
@@ -235,9 +236,7 @@ describe('CopilotProvider', () => {
 
   test('always calls client.stop() and session.disconnect() in finally', async () => {
     fakeSession.send.mockImplementation(async () => fakeSession.emit('session.idle', {}));
-    await consume(
-      new CopilotProvider().sendQuery('hi', '/repo', undefined, { model: 'gpt-5' })
-    );
+    await consume(new CopilotProvider().sendQuery('hi', '/repo', undefined, { model: 'gpt-5' }));
     expect(mockClientStop.mock.calls.length).toBe(1);
     expect(fakeSession.disconnect.mock.calls.length).toBeGreaterThanOrEqual(1);
   });
