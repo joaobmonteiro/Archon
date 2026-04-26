@@ -504,7 +504,10 @@ export class IsolationResolver {
         workflow_type: workflowType,
         workflow_id: workflowId,
         working_path: isolatedEnv.workingPath,
-        branch_name: isolatedEnv.branchName,
+        // SbxEnvironment.branchName is optional (only set when sbx --branch
+        // mode is on). Fall back to the sandbox id so the NOT NULL DB column
+        // is satisfied with a still-unique identifier.
+        branch_name: isolatedEnv.branchName ?? toBranchName(isolatedEnv.id),
         created_by_platform: platformType,
         metadata: {
           related_issues: hints?.linkedIssues ?? [],

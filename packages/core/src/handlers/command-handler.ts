@@ -8,7 +8,7 @@ import { type Conversation, type CommandResult, ConversationNotFoundError } from
 import * as db from '../db/conversations';
 import * as codebaseDb from '../db/codebases';
 import * as sessionDb from '../db/sessions';
-import { listWorktrees, execFileAsync, toRepoPath } from '@archon/git';
+import { listWorktrees, execFileAsync, toRepoPath, toBranchName } from '@archon/git';
 import { getIsolationProvider } from '@archon/isolation';
 import * as isolationEnvDb from '../db/isolation-environments';
 import {
@@ -295,7 +295,7 @@ async function handleWorktreeCommand(
           workflow_id: `task-${branchName}`,
           provider: 'worktree',
           working_path: env.workingPath,
-          branch_name: env.branchName ?? branchName,
+          branch_name: env.branchName ?? toBranchName(branchName),
           created_by_platform: conversation.platform_type,
         });
 

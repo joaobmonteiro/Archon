@@ -108,6 +108,40 @@ const ERROR_PATTERNS: { pattern: string; message: string; known: boolean }[] = [
       'to opt out if submodules are not needed for your workflows.',
     known: true,
   },
+  // --- sbx (Docker AI Sandbox) provider patterns ---
+  {
+    pattern: 'sbx: command not found',
+    message:
+      '**Error:** `sbx` CLI is not installed. Install Docker Sandboxes ' +
+      '(https://docs.docker.com/ai/sandboxes/get-started/) and run `sbx login`.',
+    known: true,
+  },
+  {
+    pattern: 'kvm',
+    message:
+      '**Error:** Docker Sandboxes require KVM (Linux) or the Hypervisor Platform (Windows). ' +
+      'Verify with `ls /dev/kvm`. Hosted VMs without nested virtualization cannot run sbx.',
+    known: true,
+  },
+  {
+    pattern: 'sbx login',
+    message: '**Error:** Not logged in to Docker Sandboxes. Run `sbx login` once on this machine.',
+    known: true,
+  },
+  {
+    pattern: 'image pull',
+    message:
+      '**Error:** Failed to pull the sandbox image. Check network connectivity and the ' +
+      '`isolation.sbx.image` value in `.archon/config.yaml`.',
+    known: true,
+  },
+  {
+    pattern: 'sandbox quota',
+    message:
+      '**Error:** Docker Sandbox quota reached. Run `sbx ls` to inspect active sandboxes ' +
+      'and `sbx rm <id>` (or `archon isolation cleanup`) to free slots.',
+    known: true,
+  },
 ];
 
 /**

@@ -13,6 +13,8 @@ export type {
   CreatedWorktreeMetadata,
   WorktreeMetadata,
   WorktreeEnvironment,
+  SbxEnvironment,
+  SbxEnvironmentMetadata,
   IsolatedEnvironment,
   DestroyOptions,
   WorktreeDestroyOptions,
@@ -30,6 +32,9 @@ export type {
   IsolationResolution,
 } from './types';
 
+// --- Config (.archon/config.yaml shapes) ---
+export type { IsolationConfig, SbxConfig } from './config';
+
 export { isPRIsolationRequest } from './types';
 
 // --- Store ---
@@ -39,7 +44,12 @@ export type { IIsolationStore } from './store';
 export { IsolationBlockedError, classifyIsolationError } from './errors';
 
 // --- Factory ---
-export { getIsolationProvider, configureIsolation, resetIsolationProvider } from './factory';
+export {
+  getIsolationProvider,
+  configureIsolation,
+  setIsolationProviderType,
+  resetIsolationProvider,
+} from './factory';
 
 // --- Resolver ---
 export { IsolationResolver } from './resolver';
@@ -47,6 +57,7 @@ export type { IsolationResolverDeps } from './resolver';
 
 // --- Provider ---
 export { WorktreeProvider } from './providers/worktree';
+export { SbxProvider, SbxNotImplementedError } from './providers/sbx';
 
 // --- PR state lookup ---
 export { getPrState } from './pr-state';

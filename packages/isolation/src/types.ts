@@ -10,7 +10,7 @@ import type { RepoPath, BranchName } from '@archon/git';
 
 // --- Provider Types ---
 
-export type IsolationProviderType = 'worktree' | 'container' | 'vm' | 'remote';
+export type IsolationProviderType = 'worktree' | 'sbx' | 'container' | 'vm' | 'remote';
 
 export type IsolationWorkflowType = 'issue' | 'pr' | 'review' | 'thread' | 'task';
 
@@ -122,7 +122,30 @@ export interface WorktreeEnvironment extends IsolatedEnvironmentBase {
   metadata: WorktreeMetadata;
 }
 
-export type IsolatedEnvironment = WorktreeEnvironment;
+export interface SbxEnvironmentMetadata {
+  /** Image the sandbox was launched from (sbx default or user-specified). */
+  image?: string;
+  /** Network policy in effect at create time, for `archon isolation list` display. */
+  networkPolicy?: string;
+  /** Original isolation request, retained for diagnostics and reuse. */
+  request?: IsolationRequest;
+}
+
+/**
+ * Docker AI Sandbox (`sbx`) environment.
+ *
+ * `id` is the sbx sandbox identifier (returned by `sbx run`). `workingPath`
+ * is the path *inside* the sandbox where the workflow will execute (typically
+ * `/workspace`). When sbx `--branch` mode is enabled, `branchName` reflects
+ * the in-sandbox `.sbx/` worktree branch.
+ */
+export interface SbxEnvironment extends IsolatedEnvironmentBase {
+  provider: 'sbx';
+  branchName?: BranchName;
+  metadata: SbxEnvironmentMetadata;
+}
+
+export type IsolatedEnvironment = WorktreeEnvironment | SbxEnvironment;
 
 // --- Provider Interface ---
 

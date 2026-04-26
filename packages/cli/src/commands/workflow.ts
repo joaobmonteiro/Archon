@@ -581,7 +581,9 @@ export async function workflowRunCommand(
         workflow_id: branchIdentifier,
         provider: 'worktree',
         working_path: isolatedEnv.workingPath,
-        branch_name: isolatedEnv.branchName,
+        // SbxEnvironment.branchName is optional; fall back to the env id so
+        // the NOT NULL DB column is populated with a unique identifier.
+        branch_name: isolatedEnv.branchName ?? git.toBranchName(isolatedEnv.id),
         created_by_platform: 'cli',
         metadata: {},
       });

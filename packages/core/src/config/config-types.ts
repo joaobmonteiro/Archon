@@ -20,6 +20,7 @@ import type {
   PiProviderDefaults,
   ProviderDefaultsMap,
 } from '@archon/providers/types';
+import type { IsolationConfig } from '@archon/isolation';
 
 export type {
   ClaudeProviderDefaults,
@@ -28,6 +29,7 @@ export type {
   PiProviderDefaults,
   ProviderDefaultsMap,
 };
+export type { IsolationConfig };
 
 /**
  * Intersection type: generic `ProviderDefaultsMap` (any string key) with
@@ -169,6 +171,16 @@ export interface RepoConfig {
      */
     autoLoad?: boolean;
   };
+
+  /**
+   * Isolation strategy for this repository.
+   *
+   * `provider: 'worktree'` (default) keeps today's git-worktree-based
+   * isolation. `provider: 'sbx'` opts into Docker AI Sandboxes (microVMs)
+   * — see `docs/research/sbx-feasibility.md`. The `worktree:` block below
+   * still applies when the worktree provider is active.
+   */
+  isolation?: IsolationConfig;
 
   /**
    * Worktree settings for this repository
